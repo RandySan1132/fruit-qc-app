@@ -2,6 +2,7 @@ import streamlit as st
 from keras.models import load_model
 from PIL import Image, ImageOps
 import numpy as np
+import os
 
 # 1. Configuration
 st.set_page_config(page_title="Fruit Quality Control", page_icon="🍎")
@@ -12,8 +13,9 @@ st.write("Visual Quality Control System (PoC)")
 # 2. Load the Model (Cached so it doesn't reload every time)
 @st.cache_resource
 def load_keras_model():
-    # Make sure 'keras_model.h5' is in the same folder as this script
-    model = load_model("keras_model.h5", compile=False)
+    # This forces Python to look in the exact current directory
+    file_path = os.path.abspath("keras_model.h5")
+    model = load_model(file_path, compile=False)
     return model
 
 # Load class names
@@ -70,4 +72,5 @@ if img_file_buffer is not None:
     elif "Fresh" in clean_name or "Pass" in clean_name:
         st.success("✅ PASSED INSPECTION")
     else:
+
         st.info("System Ready")
