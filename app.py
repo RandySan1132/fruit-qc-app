@@ -1,8 +1,10 @@
 import streamlit as st
-import tensorflow as tf
 from PIL import Image, ImageOps
 import numpy as np
 import os
+
+# --- THE FIX: Use the standalone Keras legacy library ---
+import tf_keras
 
 # 1. Configuration
 st.set_page_config(page_title="Fruit Quality Control", page_icon="🍎")
@@ -13,12 +15,11 @@ st.write("Visual Quality Control System (PoC)")
 # 2. Robust Model Loader
 @st.cache_resource
 def load_model_from_file():
-    # Force absolute path to avoid confusion
+    # Force absolute path
     model_path = os.path.abspath("keras_model.h5")
     
-    # Load the model using TensorFlow's direct Keras loader
-    # compile=False is crucial for Teachable Machine models
-    model = tf.keras.models.load_model(model_path, compile=False)
+    # USE tf_keras HERE to handle the "groups=1" error automatically
+    model = tf_keras.models.load_model(model_path, compile=False)
     return model
 
 # Load Labels
@@ -29,12 +30,11 @@ except FileNotFoundError:
     st.error("❌ Error: 'labels.txt' is missing. Please upload it.")
     st.stop()
 
-# Load Model (Without hiding errors)
+# Load Model
 try:
     model = load_model_from_file()
 except Exception as e:
     st.error(f"❌ Error loading model: {e}")
-    st.info("Tip: This often happens if the 'keras_model.h5' is corrupted or incompatible.")
     st.stop()
 
 # 3. The Camera Interface
