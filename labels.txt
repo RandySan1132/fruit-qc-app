@@ -1,0 +1,3 @@
+0 Grade A (Pass)
+1 Defect (Reject)
+2 Empty Background
