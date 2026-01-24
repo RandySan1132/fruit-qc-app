@@ -4,6 +4,3 @@ tf_keras
 pillow
 numpy
 h5py
-streamlit-webrtc
-opencv-python-headless
-av
