@@ -2,78 +2,103 @@ import streamlit as st
 from PIL import Image, ImageOps
 import numpy as np
 import os
-
-# --- THE FIX: Use the standalone Keras legacy library ---
 import tf_keras
+import cv2
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode, RTCConfiguration
+import av
 
 # 1. Configuration
-st.set_page_config(page_title="Fruit Quality Control", page_icon="🍎")
+st.set_page_config(page_title="Fruit QC Live", page_icon="🍎")
+st.title("🍎 Live Factory Scanner")
+st.write("Point camera at object for real-time analysis")
 
-st.title("🍎 Factory AI Inspector")
-st.write("Visual Quality Control System (PoC)")
-
-# 2. Robust Model Loader
+# 2. Load Model & Labels
 @st.cache_resource
-def load_model_from_file():
+def load_model_and_labels():
     # Force absolute path
     model_path = os.path.abspath("keras_model.h5")
-    
-    # USE tf_keras HERE to handle the "groups=1" error automatically
     model = tf_keras.models.load_model(model_path, compile=False)
-    return model
+    
+    # Load labels
+    try:
+        with open("labels.txt", "r") as f:
+            class_names = [line.strip() for line in f.readlines()]
+    except:
+        class_names = ["Error Loading Labels"]
+        
+    return model, class_names
 
-# Load Labels
 try:
-    with open("labels.txt", "r") as f:
-        class_names = [line.strip() for line in f.readlines()]
-except FileNotFoundError:
-    st.error("❌ Error: 'labels.txt' is missing. Please upload it.")
-    st.stop()
-
-# Load Model
-try:
-    model = load_model_from_file()
+    model, class_names = load_model_and_labels()
 except Exception as e:
-    st.error(f"❌ Error loading model: {e}")
+    st.error(f"Error loading model: {e}")
     st.stop()
 
-# 3. The Camera Interface
-st.write("### 📸 Scan Product")
-img_file_buffer = st.camera_input("Take a picture of the apple")
+# 3. Define the Live Processor
+# This function runs for EVERY single video frame
+class VideoProcessor:
+    def recv(self, frame):
+        # Convert video frame to an image we can process
+        img = frame.to_ndarray(format="bgr24")
+        
+        # --- AI PREDICTION LOGIC ---
+        # 1. Resize to 224x224 (Model Requirement)
+        # We use OpenCV here because it's faster for video than Pillow
+        img_resized = cv2.resize(img, (224, 224))
+        
+        # 2. Normalize (same as before: -1 to 1)
+        img_array = np.asarray(img_resized)
+        normalized_image_array = (img_array.astype(np.float32) / 127.5) - 1
+        
+        # 3. Shape for Model
+        data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
+        data[0] = normalized_image_array
+        
+        # 4. Predict
+        prediction = model.predict(data)
+        index = np.argmax(prediction)
+        class_name = class_names[index]
+        confidence_score = prediction[0][index]
+        
+        # --- VISUALIZATION LOGIC ---
+        # Clean the name (remove "0 ", "1 ")
+        clean_name = class_name[2:] if class_name[0].isdigit() else class_name
+        
+        # Decide Color: Green for Fresh, Red for Rotten
+        if "Rotten" in clean_name or "Reject" in clean_name:
+            color = (0, 0, 255) # Red (BGR format)
+            status = "REJECT"
+        elif "Fresh" in clean_name or "Pass" in clean_name:
+            color = (0, 255, 0) # Green
+            status = "PASS"
+        else:
+            color = (255, 0, 0) # Blue
+            status = "WAITING"
 
-if img_file_buffer is not None:
-    # 4. Pre-process
-    image = Image.open(img_file_buffer)
-    
-    # Resize to 224x224 (Standard for Teachable Machine)
-    size = (224, 224)
-    image = ImageOps.fit(image, size, Image.Resampling.LANCZOS)
-    
-    # Convert and Normalize
-    image_array = np.asarray(image)
-    normalized_image_array = (image_array.astype(np.float32) / 127.5) - 1
-    
-    data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
-    data[0] = normalized_image_array
+        # Draw the Rectangle and Text on the video frame
+        # (x, y) coordinates for text
+        cv2.putText(img, f"{status}: {int(confidence_score*100)}%", (20, 50), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+        cv2.putText(img, clean_name, (20, 100), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        # Return the annotated frame back to the screen
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-    # 5. Prediction
-    prediction = model.predict(data)
-    index = np.argmax(prediction)
-    class_name = class_names[index]
-    confidence_score = prediction[0][index]
+# 4. The Live Camera Component
+# "STUN Server" is needed to make it work on Mobile Phones over 4G/5G
+rtc_configuration = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
 
-    # 6. Result Display
-    st.divider()
-    
-    # Clean up class name (Remove "0 ", "1 " prefix)
-    clean_name = class_name[2:] if class_name[0].isdigit() else class_name
-    
-    st.subheader(f"Result: {clean_name}")
-    st.metric(label="Confidence", value=f"{confidence_score:.2%}")
+webrtc_streamer(
+    key="fruit-scanner",
+    mode=WebRtcMode.SENDRECV,
+    rtc_configuration=rtc_configuration,
+    video_processor_factory=VideoProcessor,
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True,
+)
 
-    if "Rotten" in clean_name or "Reject" in clean_name:
-        st.error("⚠️ DEFECT DETECTED - REJECT")
-    elif "Fresh" in clean_name or "Pass" in clean_name:
-        st.success("✅ QUALITY CHECK PASSED")
-    else:
-        st.info(f"Detected: {clean_name}")
+st.divider()
+st.info("💡 Note: If the video is laggy, it is because the free cloud server is processing every frame.")
